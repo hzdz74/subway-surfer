@@ -1,4 +1,5 @@
 export type AnatomyLayer = 'skin' | 'muscle' | 'skeleton' | 'nervous' | 'organs';
+export type Gender = 'male' | 'female';
 
 export interface BodyZone {
   id: string;
@@ -41,12 +42,14 @@ export interface MedicalPlace {
 export interface AppState {
   selectedZone: BodyZone | null;
   activeLayer: AnatomyLayer;
+  gender: Gender;
   chatMessages: ChatMessage[];
   isChatLoading: boolean;
   activePanel: 'chat' | 'maps' | 'shop' | null;
   userLocation: { lat: number; lng: number } | null;
   setSelectedZone: (zone: BodyZone | null) => void;
   setActiveLayer: (layer: AnatomyLayer) => void;
+  setGender: (gender: Gender) => void;
   addMessage: (message: ChatMessage) => void;
   setChatLoading: (loading: boolean) => void;
   setActivePanel: (panel: 'chat' | 'maps' | 'shop' | null) => void;

@@ -1,12 +1,13 @@
 'use client';
 
 import { create } from 'zustand';
-import { AppState, BodyZone, AnatomyLayer, ChatMessage } from '@/types';
+import { AppState, BodyZone, AnatomyLayer, ChatMessage, Gender } from '@/types';
 import { generateId } from '@/lib/utils';
 
 export const useAppStore = create<AppState>((set) => ({
   selectedZone: null,
   activeLayer: 'skin',
+  gender: 'male',
   chatMessages: [
     {
       id: 'init-msg',
@@ -37,6 +38,8 @@ export const useAppStore = create<AppState>((set) => ({
   },
 
   setActiveLayer: (layer: AnatomyLayer) => set({ activeLayer: layer }),
+
+  setGender: (gender: Gender) => set({ gender }),
 
   addMessage: (message: ChatMessage) =>
     set((state) => ({ chatMessages: [...state.chatMessages, message] })),
