@@ -2,7 +2,7 @@
 
 import { useRef, useCallback, Suspense } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Environment, ContactShadows, Html } from '@react-three/drei';
+import { OrbitControls, ContactShadows, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { useAppStore } from '@/store/useAppStore';
 import { getZoneById } from '@/lib/bodyZones';
@@ -72,7 +72,7 @@ function SceneContent() {
           blur={2}
           far={4}
         />
-        <Environment preset="city" />
+        <hemisphereLight color="#b3d9ff" groundColor="#1a1a2e" intensity={0.5} />
       </Suspense>
     </>
   );

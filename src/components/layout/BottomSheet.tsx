@@ -87,7 +87,7 @@ export default function BottomSheet() {
       <div
         ref={sheetRef}
         style={{
-          transform: `translateY(${isOpen ? currentY : '100%'}px)`,
+          transform: isOpen ? `translateY(${currentY}px)` : 'translateY(100%)',
           height: openHeight,
           transition: isDragging ? 'none' : 'transform 0.35s cubic-bezier(0.32,0.72,0,1)',
         }}

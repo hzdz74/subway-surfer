@@ -9,11 +9,11 @@ export const useAppStore = create<AppState>((set) => ({
   activeLayer: 'skin',
   chatMessages: [
     {
-      id: generateId(),
+      id: 'init-msg',
       role: 'assistant',
       content:
         'Bonjour ! Je suis votre assistant médical IA. Cliquez sur une zone du modèle anatomique pour obtenir des informations ciblées, ou posez-moi directement votre question. \n\n⚠️ **Rappel important** : Je ne remplace en aucun cas l\'avis d\'un médecin qualifié.',
-      timestamp: new Date(),
+      timestamp: new Date(0),
     },
   ],
   isChatLoading: false,
@@ -27,7 +27,7 @@ export const useAppStore = create<AppState>((set) => ({
         id: generateId(),
         role: 'assistant',
         content: `Zone sélectionnée : **${zone.label}** (système ${zone.system}).\n\nQue souhaitez-vous savoir sur cette zone ? Je peux vous informer sur les pathologies courantes, les symptômes associés, ou vous aider à trouver un spécialiste.`,
-        timestamp: new Date(),
+        timestamp: new Date(Date.now()),
       };
       set((state) => ({
         chatMessages: [...state.chatMessages, welcomeMsg],

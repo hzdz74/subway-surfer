@@ -63,9 +63,11 @@ export default function ChatMessageBubble({ message }: Props) {
         )}
       >
         <div className="space-y-0.5">{renderMarkdown(message.content)}</div>
-        <span className="block mt-1.5 text-[10px] text-white/30">
-          {message.timestamp.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-        </span>
+        {message.timestamp.getTime() > 0 && (
+          <span suppressHydrationWarning className="block mt-1.5 text-[10px] text-white/30">
+            {message.timestamp.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+          </span>
+        )}
       </div>
     </div>
   );
