@@ -8,6 +8,10 @@ export const metadata: Metadata = {
   title: 'MedAssist 3D — Assistant Médical IA',
   description:
     'Application MedTech révolutionnaire : modèle anatomique 3D interactif, assistant IA de diagnostic, géolocalisation de professionnels et matériel médical certifié.',
+  other: {
+    // Required for BioDigital Human iframe authentication (referrer header)
+    referrer: 'always',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

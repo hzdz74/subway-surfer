@@ -6,20 +6,18 @@ import { Activity, Info } from 'lucide-react';
 import SidePanel from '@/components/layout/SidePanel';
 import BottomSheet from '@/components/layout/BottomSheet';
 
-// Dynamically import the 3D canvas to avoid SSR issues with Three.js
-const AnatomyCanvas = dynamic(() => import('@/components/3d/AnatomyCanvas'), {
+// BioDigital Human viewer (medical-grade, no SSR)
+const AnatomyViewer = dynamic(() => import('@/components/3d/BioDigitalViewer'), {
   ssr: false,
   loading: () => (
-    <div className="flex flex-col items-center justify-center h-full gap-4">
+    <div className="flex flex-col items-center justify-center h-full gap-4 bg-[#07111f]">
       <div className="relative w-24 h-24">
         <div className="absolute inset-0 rounded-full border-2 border-sky-500/30 animate-spin" style={{ borderTopColor: '#0ea5e9' }} />
         <div className="absolute inset-3 rounded-full border-2 border-sky-400/20 animate-spin" style={{ borderTopColor: '#38bdf8', animationDelay: '-0.5s', animationDuration: '1.5s' }} />
-        <div className="absolute inset-0 flex items-center justify-center">
-          <Activity size={24} className="text-sky-400 animate-pulse" />
-        </div>
+        <div className="absolute inset-0 flex items-center justify-center text-2xl">🧬</div>
       </div>
       <p className="text-sky-400/60 text-sm font-medium tracking-wide animate-pulse">
-        Chargement du modèle 3D...
+        Chargement du modèle anatomique…
       </p>
     </div>
   ),
@@ -74,7 +72,7 @@ export default function Home() {
             <div className="absolute top-1/4 left-1/3 w-64 h-64 rounded-full bg-indigo-500/5 blur-2xl" />
           </div>
 
-          <AnatomyCanvas />
+          <AnatomyViewer />
         </div>
 
         {/* Side panel — only on md+ screens */}
