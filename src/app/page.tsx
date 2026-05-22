@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { Activity, Info } from 'lucide-react';
 import SidePanel from '@/components/layout/SidePanel';
 import BottomSheet from '@/components/layout/BottomSheet';
@@ -51,6 +52,12 @@ export default function Home() {
               IA connectée
             </span>
           </div>
+          <Link
+            href="/pricing"
+            className="hidden sm:inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/20 hover:border-sky-500/40 transition-all"
+          >
+            <span>⚡</span> Passer Pro
+          </Link>
           <button className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-white/50 hover:text-white/80 transition-all">
             <Info size={14} />
           </button>
