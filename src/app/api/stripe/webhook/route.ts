@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { stripe } from '@/lib/stripe';
+import { getStripe } from '@/lib/stripe';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   let event: Stripe.Event;
 
   try {
-    event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
+    event = getStripe().webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET!);
   } catch {
     return NextResponse.json({ error: 'Signature invalide' }, { status: 400 });
   }
@@ -23,7 +23,6 @@ export async function POST(req: NextRequest) {
   switch (event.type) {
     case 'checkout.session.completed': {
       const session = event.data.object as Stripe.Checkout.Session;
-      // TODO: provision user subscription in DB
       console.log(`✅ Paiement confirmé — customer: ${session.customer}, email: ${session.customer_email}`);
       break;
     }
@@ -34,7 +33,6 @@ export async function POST(req: NextRequest) {
     }
     case 'customer.subscription.deleted': {
       const sub = event.data.object as Stripe.Subscription;
-      // TODO: revoke user access in DB
       console.log(`❌ Abonnement annulé — customer: ${sub.customer}`);
       break;
     }

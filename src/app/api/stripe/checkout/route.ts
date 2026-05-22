@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { stripe, PLANS, PlanKey } from '@/lib/stripe';
+import { getStripe, PLANS, PlanKey } from '@/lib/stripe';
 
 export async function GET(req: NextRequest) {
   const sessionId = req.nextUrl.searchParams.get('session_id');
   if (!sessionId) return NextResponse.json({ error: 'Missing session_id' }, { status: 400 });
   try {
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await getStripe().checkout.sessions.retrieve(sessionId);
     const plan = (session.subscription as unknown as { metadata?: Record<string, string> } | null)?.metadata?.plan ?? null;
     return NextResponse.json({ plan });
   } catch {
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     const selectedPlan = PLANS[plan as PlanKey];
     const origin = req.headers.get('origin') ?? 'http://localhost:3000';
 
-    const session = await stripe.checkout.sessions.create({
+    const session = await getStripe().checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
       customer_email: email || undefined,

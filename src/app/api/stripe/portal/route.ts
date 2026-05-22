@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { stripe } from '@/lib/stripe';
+import { getStripe } from '@/lib/stripe';
 
 export async function GET(req: NextRequest) {
   const customerId = req.nextUrl.searchParams.get('customer_id');
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   const origin = req.headers.get('origin') ?? new URL(req.url).origin;
 
   try {
-    const session = await stripe.billingPortal.sessions.create({
+    const session = await getStripe().billingPortal.sessions.create({
       customer: customerId,
       return_url: `${origin}/`,
     });
