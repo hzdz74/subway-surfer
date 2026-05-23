@@ -2,11 +2,15 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Script from 'next/script';
+import dynamic from 'next/dynamic';
 import { useAppStore } from '@/store/useAppStore';
 import { getZoneById } from '@/lib/bodyZones';
 import LayerControls from './LayerControls';
 import GenderToggle from './GenderToggle';
 import { AnatomyLayer, Gender } from '@/types';
+
+// Fallback: improved Three.js viewer (always works, no credentials needed)
+const AnatomyCanvas = dynamic(() => import('./AnatomyCanvas'), { ssr: false });
 
 const HUMAN_API_SRC = 'https://human-api.biodigital.com/build/1.2.1/human-api-1.2.1.min.js';
 const IFRAME_ID = 'bd-human-viewer';
@@ -247,12 +251,9 @@ export default function BioDigitalViewer() {
     }
   }, [activeLayer, viewerReady, applyLayer]);
 
+  // No BioDigital key → fall back to the improved Three.js parametric viewer
   if (!hasKey) {
-    return (
-      <div className="relative w-full h-full" style={{ background: 'linear-gradient(135deg, #060c1a 0%, #0c1b35 50%, #060c1a 100%)' }}>
-        <SetupScreen />
-      </div>
-    );
+    return <AnatomyCanvas />;
   }
 
   return (

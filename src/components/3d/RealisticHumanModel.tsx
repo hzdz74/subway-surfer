@@ -15,9 +15,16 @@ interface SkinMaterialProps {
 }
 
 function SkinMat({ mat, highlighted, hovered }: SkinMaterialProps) {
-  const c = highlighted ? '#0ea5e9' : hovered ? '#7dd3fc' : mat.body;
+  const c = highlighted ? '#38bdf8' : hovered ? '#7dd3fc' : mat.body;
   const e = highlighted ? '#0369a1' : hovered ? '#0284c7' : mat.emissive;
-  const ei = highlighted ? 0.5 : hovered ? 0.3 : mat.emissiveIntensity;
+  const ei = highlighted ? 0.45 : hovered ? 0.25 : mat.emissiveIntensity;
+
+  // Read extended PBR fields (present in new palette, fallback to safe defaults)
+  const extMat = mat as LayerMat & {
+    sheen?: number; sheenRoughness?: number; sheenColor?: string;
+    clearcoat?: number; clearcoatRoughness?: number;
+  };
+
   return (
     <meshPhysicalMaterial
       color={c}
@@ -27,10 +34,13 @@ function SkinMat({ mat, highlighted, hovered }: SkinMaterialProps) {
       roughness={mat.roughness}
       transparent={mat.opacity < 1}
       opacity={mat.opacity}
-      clearcoat={0.15}
-      clearcoatRoughness={0.4}
-      sheen={0.2}
-      sheenColor={new THREE.Color('#ffdfd0')}
+      side={mat.opacity < 1 ? THREE.DoubleSide : THREE.FrontSide}
+      depthWrite={mat.opacity >= 1}
+      clearcoat={extMat.clearcoat ?? 0.08}
+      clearcoatRoughness={extMat.clearcoatRoughness ?? 0.5}
+      sheen={extMat.sheen ?? 0.15}
+      sheenRoughness={extMat.sheenRoughness ?? 0.6}
+      sheenColor={new THREE.Color(extMat.sheenColor ?? '#ffddcc')}
     />
   );
 }
