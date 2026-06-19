@@ -1,23 +1,19 @@
 //@version=5
-// ════════════════════════════════════════════════════════════════════════════
-//  SOL Scalping x200 - Confluence Strategy
-//  Asset       : SOLUSDT.P (Solana Perpetual Futures)
-//  Timeframes  : 1m or 5m (paramétrable via l'UI TradingView)
-//  Leverage    : x200  →  TP +0.125% prix = +25% ROE
-//                        Liquidation à ~ -0.5% prix
-//  Confluence  : 1) Tendance  : Double EMA + VWAP
-//                2) Momentum  : RSI (déclencheur "pullback")
-//                3) Volatilité: ATR (filtre marché plat)
-//                4) Volume    : Volume > MA(volume) × multiplicateur
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================
+//  SOL Scalping x200 - Confluence Strategy (v2 - durcie)
+//  Asset      : SOLUSDT.P
+//  Timeframes : 1m or 5m (sélection dans la barre TV)
+//  Leverage   : x200  -> TP +0.125% = +25% ROE
+//                       SL -0.25%   = -50% ROE  (R/R 1:2)
+//                       Liquidation a ~ -0.5% prix
+// ============================================================
 
 strategy(
-     title                   = "SOL Scalping x200 - Confluence Strategy",
+     title                   = "SOL Scalping x200 - Confluence",
      shorttitle              = "SOL Scalp x200",
      overlay                 = true,
      initial_capital         = 1000,
-     default_qty_type        = strategy.percent_of_equity,
-     default_qty_value       = 10,
+     currency                = currency.USD,
      commission_type         = strategy.commission.percent,
      commission_value        = 0.04,
      slippage                = 2,
@@ -28,60 +24,47 @@ strategy(
      process_orders_on_close = true)
 
 
-// ════════════════════════════════════════════════════════════════════════════
-//                                INPUTS
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================
+//                           INPUTS
+// ============================================================
 
-// ── 1. General / Session ────────────────────────────────────────────────────
-GRP_GEN       = "▶ 1. Session / General"
-useSession    = input.bool(false,        "Filtrer par session de trading",          group = GRP_GEN)
-sessionStr    = input.session("0000-2359","Session UTC autorisée (HHmm-HHmm)",      group = GRP_GEN)
-useCooldown   = input.bool(true,         "Cooldown entre trades",                   group = GRP_GEN)
-cooldownBars  = input.int(3,             "Durée du cooldown (bougies)", minval = 0, group = GRP_GEN)
+// 1. Session / pacing
+useSession   = input.bool(false,         "Filtrer par session",        group = "1. Session")
+sessionStr   = input.session("0000-2359","Session UTC (HHmm-HHmm)",    group = "1. Session")
+useCooldown  = input.bool(true,          "Cooldown entre trades",      group = "1. Session")
+cooldownBars = input.int(3,              "Cooldown (bougies)",         group = "1. Session", minval = 0)
 
-// ── 2. Filtre de tendance ───────────────────────────────────────────────────
-GRP_TREND  = "▶ 2. Filtre de Tendance (Flux Macro)"
-useEma     = input.bool(true,  "Activer le filtre Double EMA",            group = GRP_TREND)
-emaFastL   = input.int(9,      "Longueur EMA rapide",   minval = 1,       group = GRP_TREND)
-emaSlowL   = input.int(21,     "Longueur EMA lente",    minval = 1,       group = GRP_TREND)
-useVwap    = input.bool(true,  "Activer le filtre VWAP (ancrage journalier)", group = GRP_TREND)
+// 2. Trend filter
+useEma   = input.bool(true, "Activer Double EMA",    group = "2. Tendance")
+emaFastL = input.int(9,     "EMA rapide",            group = "2. Tendance", minval = 1)
+emaSlowL = input.int(21,    "EMA lente",             group = "2. Tendance", minval = 1)
+useVwap  = input.bool(true, "Activer VWAP",          group = "2. Tendance")
 
-// ── 3. Oscillateur de momentum ──────────────────────────────────────────────
-GRP_MOM     = "▶ 3. Momentum (Déclencheur d'Entrée)"
-rsiLen      = input.int(7,    "Longueur RSI",                              minval = 2, group = GRP_MOM)
-rsiLongLvl  = input.float(40, "RSI niveau LONG (croisement haussier)",     step = 1,   group = GRP_MOM,
-                              tooltip = "En tendance haussière : le RSI passe sous ce niveau (pullback) puis le re-croise à la hausse → achat.")
-rsiShortLvl = input.float(60, "RSI niveau SHORT (croisement baissier)",    step = 1,   group = GRP_MOM,
-                              tooltip = "En tendance baissière : le RSI passe au-dessus de ce niveau (rebond) puis le re-croise à la baisse → vente.")
+// 3. Momentum trigger
+rsiLen      = input.int(7,    "Longueur RSI",                 group = "3. Momentum", minval = 2)
+rsiLongLvl  = input.float(40, "RSI niveau LONG (cross above)",group = "3. Momentum", step = 1)
+rsiShortLvl = input.float(60, "RSI niveau SHORT (cross below)",group = "3. Momentum", step = 1)
 
-// ── 4. Filtre de volatilité ─────────────────────────────────────────────────
-GRP_VOL    = "▶ 4. Filtre de Volatilité (ATR)"
-atrLen     = input.int(14,    "Longueur ATR",  minval = 1,                 group = GRP_VOL)
-useAtr     = input.bool(true, "Ignorer les bougies à volatilité trop faible", group = GRP_VOL)
-minAtrPct  = input.float(0.05,"ATR minimum en % du prix",   step = 0.01,   group = GRP_VOL,
-                              tooltip = "En dessous de cette volatilité, le ratio TP/frais n'est plus rentable. Trade ignoré.")
+// 4. Volatility
+atrLen    = input.int(14,    "Longueur ATR",              group = "4. Volatilite", minval = 1)
+useAtr    = input.bool(true, "Filtrer faible volatilite", group = "4. Volatilite")
+minAtrPct = input.float(0.05,"ATR min en % du prix",      group = "4. Volatilite", step = 0.01)
 
-// ── 5. Filtre de volume ─────────────────────────────────────────────────────
-GRP_VOLU = "▶ 5. Confirmation par Volume"
-useVol   = input.bool(true,  "Exiger un volume supérieur à sa moyenne",    group = GRP_VOLU)
-volMaLen = input.int(20,     "Longueur MA du volume",                      group = GRP_VOLU)
-volMult  = input.float(1.2,  "Le volume doit dépasser MA × ce multiplicateur", step = 0.1, group = GRP_VOLU)
+// 5. Volume
+useVol   = input.bool(true, "Confirmer par volume",      group = "5. Volume")
+volMaLen = input.int(20,    "Longueur MA volume",        group = "5. Volume", minval = 1)
+volMult  = input.float(1.2, "Multiplicateur volume",     group = "5. Volume", step = 0.1)
 
-// ── 6. Risk management (x200) ───────────────────────────────────────────────
-GRP_RISK = "▶ 6. Gestion du Risque (Levier x200)"
-tpPct    = input.float(0.125,  "Take Profit % (≈ +25% ROE @ x200)",        step = 0.005, group = GRP_RISK,
-                               tooltip = "0.125% de mouvement prix ≈ +25% ROE sur une position x200.")
-slPct    = input.float(0.25,   "Stop Loss % (≈ -50% ROE @ x200, R/R 1:2)", step = 0.005, group = GRP_RISK,
-                               tooltip = "0.25% de mouvement prix = -50% ROE (2× le TP). À garder sous les 0.5% de seuil de liquidation x200.")
-qtyPct   = input.float(10,     "Marge utilisée par trade (% de l'equity)", step = 1,     group = GRP_RISK,
-                               tooltip = "Portion du capital bloquée en marge pour chaque trade.")
-levInfo  = input.float(200,    "Levier (math de sizing)",                                group = GRP_RISK,
-                               tooltip = "Utilisé pour calculer la taille notionnelle de la position dans le backtest.")
+// 6. Risk management
+tpPct   = input.float(0.125, "Take Profit %  (+25% ROE x200)",  group = "6. Risque", step = 0.005, minval = 0.001)
+slPct   = input.float(0.25,  "Stop Loss %  (-50% ROE, R/R 1:2)",group = "6. Risque", step = 0.005, minval = 0.001)
+qtyPct  = input.float(10,    "Marge par trade (% equity)",      group = "6. Risque", step = 1,     minval = 0.1)
+levInfo = input.float(200,   "Levier (sizing notionnel)",       group = "6. Risque", minval = 1)
 
 
-// ════════════════════════════════════════════════════════════════════════════
-//                            INDICATEURS
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================
+//                        INDICATEURS
+// ============================================================
 
 emaFast = ta.ema(close, emaFastL)
 emaSlow = ta.ema(close, emaSlowL)
@@ -92,23 +75,20 @@ atrPct  = atrVal / close * 100.0
 volMa   = ta.sma(volume, volMaLen)
 
 
-// ════════════════════════════════════════════════════════════════════════════
-//                            CONDITIONS
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================
+//                        CONDITIONS
+// ============================================================
 
 inSession = not useSession or not na(time(timeframe.period, sessionStr))
 
-trendUp   = (not useEma  or (emaFast > emaSlow and close > emaFast)) and
-            (not useVwap or close > vwapVal)
-
-trendDn   = (not useEma  or (emaFast < emaSlow and close < emaFast)) and
-            (not useVwap or close < vwapVal)
+trendUp = (not useEma  or (emaFast > emaSlow and close > emaFast)) and (not useVwap or close > vwapVal)
+trendDn = (not useEma  or (emaFast < emaSlow and close < emaFast)) and (not useVwap or close < vwapVal)
 
 rsiLongTrig  = ta.crossover(rsiVal,  rsiLongLvl)
 rsiShortTrig = ta.crossunder(rsiVal, rsiShortLvl)
 
-volOk    = not useVol or volume > volMa * volMult
-volaOk   = not useAtr or atrPct >= minAtrPct
+volOk  = not useVol or volume > volMa * volMult
+volaOk = not useAtr or atrPct >= minAtrPct
 
 var int lastEntryBar = -10000
 cooldownOk = not useCooldown or (bar_index - lastEntryBar) >= cooldownBars
@@ -117,63 +97,54 @@ longSignal  = trendUp and rsiLongTrig  and volOk and volaOk and inSession and co
 shortSignal = trendDn and rsiShortTrig and volOk and volaOk and inSession and cooldownOk
 
 
-// ════════════════════════════════════════════════════════════════════════════
-//                     POSITION SIZING (Levier)
-// ════════════════════════════════════════════════════════════════════════════
-// On simule un trading "perp" : marge × levier = valeur notionnelle réelle.
+// ============================================================
+//                     POSITION SIZING (x200)
+// ============================================================
+//  Marge x Levier = valeur notionnelle reelle du contrat perp.
 
-marginUsd        = strategy.equity * qtyPct / 100.0
-positionValueUsd = marginUsd * levInfo
-qtyUnits         = positionValueUsd / close
+marginUsd = strategy.equity * qtyPct / 100.0
+qtyUnits  = math.max((marginUsd * levInfo) / close, 0.0)
 
 
-// ════════════════════════════════════════════════════════════════════════════
-//                            EXÉCUTION
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================
+//                       EXECUTION
+// ============================================================
+//  L'exit est attache a l'entree dans le meme bloc :
+//  Pine utilise `close` comme proxy fiable du prix d'execution
+//  car process_orders_on_close = true.
 
 if longSignal and strategy.position_size == 0
     strategy.entry("Long", strategy.long, qty = qtyUnits)
+    strategy.exit("XL", from_entry = "Long",
+                  limit = close * (1 + tpPct / 100.0),
+                  stop  = close * (1 - slPct / 100.0))
     lastEntryBar := bar_index
 
 if shortSignal and strategy.position_size == 0
     strategy.entry("Short", strategy.short, qty = qtyUnits)
+    strategy.exit("XS", from_entry = "Short",
+                  limit = close * (1 - tpPct / 100.0),
+                  stop  = close * (1 + slPct / 100.0))
     lastEntryBar := bar_index
 
-// TP / SL dynamiques calés sur le prix d'entrée moyen
-longTp  = strategy.position_avg_price * (1 + tpPct / 100.0)
-longSl  = strategy.position_avg_price * (1 - slPct / 100.0)
-shortTp = strategy.position_avg_price * (1 - tpPct / 100.0)
-shortSl = strategy.position_avg_price * (1 + slPct / 100.0)
 
-if strategy.position_size > 0
-    strategy.exit("Exit L", from_entry = "Long",  limit = longTp,  stop = longSl)
+// ============================================================
+//                         VISUELS
+// ============================================================
 
-if strategy.position_size < 0
-    strategy.exit("Exit S", from_entry = "Short", limit = shortTp, stop = shortSl)
+plot(useEma  ? emaFast : na, title = "EMA Fast", color = color.new(color.yellow, 0))
+plot(useEma  ? emaSlow : na, title = "EMA Slow", color = color.new(color.orange, 0), linewidth = 2)
+plot(useVwap ? vwapVal : na, title = "VWAP",     color = color.new(color.aqua,   0), linewidth = 2)
 
-
-// ════════════════════════════════════════════════════════════════════════════
-//                            VISUELS
-// ════════════════════════════════════════════════════════════════════════════
-
-plot(useEma  ? emaFast : na, "EMA Fast", color = color.new(color.yellow, 0), linewidth = 1)
-plot(useEma  ? emaSlow : na, "EMA Slow", color = color.new(color.orange, 0), linewidth = 2)
-plot(useVwap ? vwapVal : na, "VWAP",     color = color.new(color.aqua,   0), linewidth = 2)
-
-plotshape(longSignal  and strategy.position_size == 0, "Long Trigger",
-          shape.triangleup,   location.belowbar, color.new(color.lime, 0), size = size.tiny)
-plotshape(shortSignal and strategy.position_size == 0, "Short Trigger",
-          shape.triangledown, location.abovebar, color.new(color.red,  0), size = size.tiny)
-
-plot(strategy.position_size > 0 ? longTp  : strategy.position_size < 0 ? shortTp : na,
-     "TP", color = color.new(color.green, 30), style = plot.style_linebr, linewidth = 1)
-plot(strategy.position_size > 0 ? longSl  : strategy.position_size < 0 ? shortSl : na,
-     "SL", color = color.new(color.red,   30), style = plot.style_linebr, linewidth = 1)
+plotshape(longSignal,  title = "Long",  style = shape.triangleup,
+          location = location.belowbar, color = color.new(color.lime, 0), size = size.tiny)
+plotshape(shortSignal, title = "Short", style = shape.triangledown,
+          location = location.abovebar, color = color.new(color.red,  0), size = size.tiny)
 
 
-// ════════════════════════════════════════════════════════════════════════════
-//                            ALERTES
-// ════════════════════════════════════════════════════════════════════════════
+// ============================================================
+//                         ALERTES
+// ============================================================
 
-alertcondition(longSignal,  "LONG entry",  "Long entry signal on {{ticker}} @ {{close}}")
-alertcondition(shortSignal, "SHORT entry", "Short entry signal on {{ticker}} @ {{close}}")
+alertcondition(longSignal,  title = "LONG entry",  message = "LONG SOLUSDT.P @ {{close}}")
+alertcondition(shortSignal, title = "SHORT entry", message = "SHORT SOLUSDT.P @ {{close}}")
