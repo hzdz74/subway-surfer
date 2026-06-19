@@ -71,8 +71,8 @@ volMult  = input.float(1.2,  "Le volume doit dépasser MA × ce multiplicateur",
 GRP_RISK = "▶ 6. Gestion du Risque (Levier x200)"
 tpPct    = input.float(0.125,  "Take Profit % (≈ +25% ROE @ x200)",        step = 0.005, group = GRP_RISK,
                                tooltip = "0.125% de mouvement prix ≈ +25% ROE sur une position x200.")
-slPct    = input.float(0.0625, "Stop Loss % (R/R ≈ 2:1 par défaut)",       step = 0.005, group = GRP_RISK,
-                               tooltip = "À garder TRÈS en dessous des 0.5% de seuil de liquidation x200. Défaut : 0.0625% (-12.5% ROE).")
+slPct    = input.float(0.25,   "Stop Loss % (≈ -50% ROE @ x200, R/R 1:2)", step = 0.005, group = GRP_RISK,
+                               tooltip = "0.25% de mouvement prix = -50% ROE (2× le TP). À garder sous les 0.5% de seuil de liquidation x200.")
 qtyPct   = input.float(10,     "Marge utilisée par trade (% de l'equity)", step = 1,     group = GRP_RISK,
                                tooltip = "Portion du capital bloquée en marge pour chaque trade.")
 levInfo  = input.float(200,    "Levier (math de sizing)",                                group = GRP_RISK,
