@@ -1,17 +1,35 @@
 //@version=5
 // ============================================================
-//  SOL Breakout x200 - RSI Filter Strategy
-//  Asset      : SOLUSDT.P
-//  Logique    : Cassure (close) du canal Donchian HH/LL des N
-//               dernieres bougies, filtree par RSI dans [30 ; 70].
-//  Cible      : TP +0.125% prix = +25% ROE @ x200
-//               SL -0.0625% prix = -12.5% ROE  (R/R 2:1)
-//               Liquidation a ~ -0.5% prix
+//  SOL Dow Breakout x200 - RSI Filter Strategy
+//
+//  THEORIE DE DOW APPLIQUEE A L'EXECUTION
+//  --------------------------------------
+//  1) TENDANCE PRIMAIRE (sur TF macro, 60m par defaut)
+//     - Bull Dow  : Higher High ET Higher Low (HH-HL)
+//     - Bear Dow  : Lower  High ET Lower  Low (LH-LL)
+//     - Indecis   : structure mixte -> AUCUN trade
+//     Detection via ta.pivothigh / ta.pivotlow.
+//
+//  2) CONFIRMATION PAR VOLUME (Dow #5)
+//     Le breakout n'est valide que si le volume depasse sa MA
+//     -> la "main publique" valide le mouvement.
+//
+//  3) EXECUTION DANS LE SENS DE LA TENDANCE
+//     - LONG  : Bull Dow + cassure HH Donchian + RSI in [30;70] + volume
+//     - SHORT : Bear Dow + cassure LL Donchian + RSI in [30;70] + volume
+//     -> Aucun contre-tendance, jamais.
+//
+//  4) RSI [30;70] = filtre d'epuisement (phase 3 Dow : distribution
+//     ou accumulation), evite d'entrer au sommet/creux.
+//
+//  Cibles : TP +0.125% = +25% ROE @ x200
+//           SL -0.0625% = -12.5% ROE (R/R 2:1)
+//           Liquidation ~ -0.5% prix
 // ============================================================
 
 strategy(
-     title                   = "SOL Breakout x200 - RSI Filter",
-     shorttitle              = "SOL Brk x200",
+     title                   = "SOL Dow Breakout x200 - RSI Filter",
+     shorttitle              = "SOL Dow x200",
      overlay                 = true,
      initial_capital         = 1000,
      currency                = currency.USD,
@@ -29,83 +47,128 @@ strategy(
 //                           INPUTS
 // ============================================================
 
-// 0. Timeframe d'analyse
-tfChoice = input.timeframe("5", "Timeframe d'analyse",
-                            options = ["1", "5"], group = "0. Timeframe",
-                            tooltip = "1 = 1m, 5 = 5m. La strategie opere sur ce TF via request.security, quel que soit le TF du chart. Astuce : mettez le chart sur le meme TF ou plus bas.")
+// 0. Timeframes (architecture Dow multi-TF)
+tfExec  = input.timeframe("5",  "TF Execution (scalping)",
+                                options = ["1", "5"], group = "0. Timeframes",
+                                tooltip = "TF des bougies de declenchement (1m ou 5m).")
+tfMacro = input.timeframe("60", "TF Macro (tendance primaire Dow)",
+                                options = ["15", "30", "60", "240"], group = "0. Timeframes",
+                                tooltip = "TF ou Dow Theory identifie la tendance majeure (HH-HL bull, LH-LL bear). Doit etre > TF execution.")
 
-// 1. Breakout (canal Donchian)
-breakoutLen = input.int(20, "Longueur du canal (bougies HH/LL)",
-                            group = "1. Breakout", minval = 2,
-                            tooltip = "Nombre de bougies pour definir le plus haut / plus bas a casser. 10 = reactif (signaux frequents), 20 = robuste (defaut), 50 = swing.")
+// 1. Dow Theory (pivots de structure)
+pivotLen = input.int(5, "Largeur pivot (gauche & droite)",
+                        group = "1. Dow Theory", minval = 2,
+                        tooltip = "Bougies a gauche ET a droite pour valider un pivot Dow. 3 = reactif, 5 = robuste (defaut), 10 = swing strict.")
 
-// 2. Filtre RSI strict
-rsiLen   = input.int(14,    "Periode RSI",                   group = "2. RSI Filter", minval = 2)
-rsiLower = input.float(30,  "Borne basse RSI (interdit si <)",group = "2. RSI Filter", step = 1, minval = 0,  maxval = 100,
-                            tooltip = "Aucun trade si RSI < cette valeur (zone de survente extreme).")
-rsiUpper = input.float(70,  "Borne haute RSI (interdit si >)",group = "2. RSI Filter", step = 1, minval = 0,  maxval = 100,
-                            tooltip = "Aucun trade si RSI > cette valeur (zone de surachat extreme).")
+// 2. Breakout (canal Donchian sur TF execution)
+breakoutLen = input.int(20, "Longueur du canal HH/LL",
+                            group = "2. Breakout", minval = 2,
+                            tooltip = "Nombre de bougies pour definir le plus haut / plus bas a casser sur le TF execution.")
 
-// 3. Gestion du risque
+// 3. Filtre RSI strict (zones d'epuisement Dow phase 3)
+rsiLen   = input.int(14,   "Periode RSI",                   group = "3. RSI Filter", minval = 2)
+rsiLower = input.float(30, "Borne basse RSI (interdit si <)",group = "3. RSI Filter", step = 1, minval = 0, maxval = 100,
+                           tooltip = "Aucun trade si RSI < cette valeur (zone de survente extreme).")
+rsiUpper = input.float(70, "Borne haute RSI (interdit si >)",group = "3. RSI Filter", step = 1, minval = 0, maxval = 100,
+                           tooltip = "Aucun trade si RSI > cette valeur (zone de surachat extreme).")
+
+// 4. Volume (confirmation Dow #5)
+useVol   = input.bool(true, "Volume doit confirmer (principe Dow)",
+                            group = "4. Volume")
+volMaLen = input.int(20,   "MA du volume",                  group = "4. Volume", minval = 1)
+volMult  = input.float(1.3,"Volume requis x MA",            group = "4. Volume", step = 0.1, minval = 1.0,
+                           tooltip = "Le volume du breakout doit etre superieur a (MA volume * ce facteur).")
+
+// 5. Risk management
 tpPct = input.float(0.125, "Take Profit %  (+25% ROE @ x200)",
-                           group = "3. Risque", step = 0.005, minval = 0.001,
-                           tooltip = "0.125% de mouvement prix = +25% ROE sur position x200.")
-slPct = input.float(0.0625,"Stop Loss %  (R/R 2:1, -12.5% ROE)",
-                           group = "3. Risque", step = 0.005, minval = 0.001,
-                           tooltip = "0.0625% prix = -12.5% ROE. Doit rester < 0.5% (liquidation x200). Augmenter pour structure-based.")
+                           group = "5. Risque", step = 0.005, minval = 0.001,
+                           tooltip = "0.125% prix = +25% ROE x200.")
+slPct = input.float(0.0625,"Stop Loss %  (-12.5% ROE, R/R 2:1)",
+                           group = "5. Risque", step = 0.005, minval = 0.001,
+                           tooltip = "0.0625% prix = -12.5% ROE. Doit rester < 0.5% (liquidation x200).")
 
-// 4. Position sizing
-qtyPct  = input.float(10,  "Marge par trade (% equity)",    group = "4. Sizing", step = 1, minval = 0.1)
-levInfo = input.float(200, "Levier (sizing notionnel)",     group = "4. Sizing", minval = 1)
+// 6. Position sizing
+qtyPct  = input.float(10,  "Marge par trade (% equity)",    group = "6. Sizing", step = 1, minval = 0.1)
+levInfo = input.float(200, "Levier (sizing notionnel)",     group = "6. Sizing", minval = 1)
 
-// 5. Pacing
-useCooldown  = input.bool(true, "Cooldown entre trades",    group = "5. Pacing")
-cooldownBars = input.int(2,     "Cooldown (bougies)",       group = "5. Pacing", minval = 0)
+// 7. Pacing
+useCooldown  = input.bool(true, "Cooldown entre trades",    group = "7. Pacing")
+cooldownBars = input.int(2,     "Cooldown (bougies)",       group = "7. Pacing", minval = 0)
 
 
 // ============================================================
-//          INDICATEURS (evalues au TF choisi)
+//      DOW THEORY : TENDANCE PRIMAIRE sur TF macro
 // ============================================================
-//  Pour eviter tout biais d'avenir, on utilise lookahead_off :
-//  request.security retourne la valeur de la DERNIERE bougie
-//  CLOTUREE du TF demande.
+//  On detecte les pivots, on memorise les 2 derniers HH et 2
+//  derniers LL pour evaluer la structure :
+//    Bull = lastHH > prevHH ET lastLL > prevLL
+//    Bear = lastHH < prevHH ET lastLL < prevLL
 
-f_calc() =>
+f_macroDow() =>
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low,   pivotLen, pivotLen)
+    var float lastPH = na
+    var float prevPH = na
+    var float lastPL = na
+    var float prevPL = na
+    if not na(ph)
+        prevPH := lastPH
+        lastPH := ph
+    if not na(pl)
+        prevPL := lastPL
+        lastPL := pl
+    bull = not na(prevPH) and not na(prevPL) and lastPH > prevPH and lastPL > prevPL
+    bear = not na(prevPH) and not na(prevPL) and lastPH < prevPH and lastPL < prevPL
+    [bull, bear, lastPH, lastPL]
+
+[dowBull, dowBear, dowHH, dowLL] = request.security(syminfo.tickerid, tfMacro, f_macroDow(),
+                                                     lookahead = barmerge.lookahead_off)
+
+
+// ============================================================
+//   EXECUTION : Breakout + RSI + Volume sur TF execution
+// ============================================================
+
+f_exec() =>
     hh        = ta.highest(high, breakoutLen)[1]   // [1] = exclure la bougie courante
     ll        = ta.lowest(low,   breakoutLen)[1]
     rsi       = ta.rsi(close, rsiLen)
+    volMa     = ta.sma(volume, volMaLen)
     longTrig  = ta.crossover(close,  hh)
     shortTrig = ta.crossunder(close, ll)
-    [hh, ll, rsi, longTrig, shortTrig]
+    volSpike  = volume > volMa * volMult
+    [hh, ll, rsi, longTrig, shortTrig, volSpike]
 
-[hhTf, llTf, rsiTf, longTrigTf, shortTrigTf] = request.security(syminfo.tickerid, tfChoice, f_calc(),
-                                                                  lookahead = barmerge.lookahead_off)
+[hhExec, llExec, rsiExec, longTrigE, shortTrigE, volSpikeE] = request.security(syminfo.tickerid, tfExec, f_exec(),
+                                                                                lookahead = barmerge.lookahead_off)
 
 
 // ============================================================
-//                        CONDITIONS
+//                  CONDITIONS FINALES
 // ============================================================
 
-// Flanc montant : on n'entre QUE sur la chart bar ou le trigger
-// devient true (evite les re-entrees pendant la duree d'une bougie HTF).
-newLong  = longTrigTf  and not longTrigTf[1]
-newShort = shortTrigTf and not shortTrigTf[1]
+// Detection du flanc montant (1 seule entree par cassure)
+newLong  = longTrigE  and not longTrigE[1]
+newShort = shortTrigE and not shortTrigE[1]
 
-// Filtre RSI : autorise uniquement si rsiLower <= RSI <= rsiUpper
-rsiOk = rsiTf >= rsiLower and rsiTf <= rsiUpper
+// Filtre RSI (zones d'epuisement)
+rsiOk = rsiExec >= rsiLower and rsiExec <= rsiUpper
 
-// Cooldown apres une entree
+// Confirmation volume (Dow #5)
+volOk = not useVol or volSpikeE
+
+// Cooldown
 var int lastEntryBar = -10000
 cooldownOk = not useCooldown or (bar_index - lastEntryBar) >= cooldownBars
 
-longSignal  = newLong  and rsiOk and cooldownOk
-shortSignal = newShort and rsiOk and cooldownOk
+// SIGNAUX = DOW + BREAKOUT + RSI + VOLUME + COOLDOWN
+longSignal  = dowBull and newLong  and rsiOk and volOk and cooldownOk
+shortSignal = dowBear and newShort and rsiOk and volOk and cooldownOk
 
 
 // ============================================================
 //                  POSITION SIZING (x200)
 // ============================================================
-//  Marge x Levier = valeur notionnelle reelle du contrat perp.
 
 marginUsd = strategy.equity * qtyPct / 100.0
 qtyUnits  = math.max((marginUsd * levInfo) / close, 0.0)
@@ -134,12 +197,21 @@ if shortSignal and strategy.position_size == 0
 //                         VISUELS
 // ============================================================
 
-plot(hhTf, title = "Canal Haut (HH)", color = color.new(color.lime, 30), linewidth = 1)
-plot(llTf, title = "Canal Bas (LL)",  color = color.new(color.red,  30), linewidth = 1)
+// Canal de breakout (TF execution)
+plot(hhExec, title = "Canal HH (exec)", color = color.new(color.lime, 40), linewidth = 1)
+plot(llExec, title = "Canal LL (exec)", color = color.new(color.red,  40), linewidth = 1)
 
-plotshape(longSignal,  title = "Long Breakout",  style = shape.triangleup,
+// Niveaux Dow macro (derniers pivots HH/LL)
+plot(dowHH, title = "Dow HH (macro)", color = color.new(color.aqua,    0), linewidth = 2, style = plot.style_circles)
+plot(dowLL, title = "Dow LL (macro)", color = color.new(color.fuchsia, 0), linewidth = 2, style = plot.style_circles)
+
+// Background = etat Dow primaire
+bgcolor(dowBull ? color.new(color.lime, 92) : dowBear ? color.new(color.red, 92) : na, title = "Etat Dow")
+
+// Marqueurs d'entree
+plotshape(longSignal,  title = "Long (Dow Bull + Breakout)",  style = shape.triangleup,
           location = location.belowbar, color = color.new(color.lime, 0), size = size.small)
-plotshape(shortSignal, title = "Short Breakout", style = shape.triangledown,
+plotshape(shortSignal, title = "Short (Dow Bear + Breakout)", style = shape.triangledown,
           location = location.abovebar, color = color.new(color.red,  0), size = size.small)
 
 
@@ -147,5 +219,5 @@ plotshape(shortSignal, title = "Short Breakout", style = shape.triangledown,
 //                         ALERTES
 // ============================================================
 
-alertcondition(longSignal,  title = "LONG breakout",  message = "BREAKOUT LONG SOLUSDT.P @ {{close}}")
-alertcondition(shortSignal, title = "SHORT breakout", message = "BREAKOUT SHORT SOLUSDT.P @ {{close}}")
+alertcondition(longSignal,  title = "LONG Dow Breakout",  message = "Dow Bull + Breakout LONG SOLUSDT.P @ {{close}}")
+alertcondition(shortSignal, title = "SHORT Dow Breakout", message = "Dow Bear + Breakout SHORT SOLUSDT.P @ {{close}}")
