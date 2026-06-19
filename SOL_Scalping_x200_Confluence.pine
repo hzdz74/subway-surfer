@@ -1,175 +1,225 @@
 //@version=5
 // ============================================================
-//  SOL Dow Breakout x200 - RSI Filter Strategy (v4)
+//  Smart Scalper Multi-Asset - Prop Firm Risk Model
 //
-//  THEORIE DE DOW APPLIQUEE A L'EXECUTION
-//  --------------------------------------
-//  1) TENDANCE PRIMAIRE (TF macro) via pivots
-//     Bull : HH-HL  |  Bear : LH-LL  |  Indecis : 0 trade
-//  2) CONFIRMATION VOLUME (Dow #5) : volume > MA(vol) x facteur
-//  3) EXECUTION DANS LE SENS : long en Bull, short en Bear
-//  4) RSI [30 ; 70] = anti-epuisement
+//  Assets    : Crypto volatile (1m/5m) + Forex majors (1m/5m)
+//  Style     : Scalping trend-following, anti-fakeout, capital-safe
 //
-//  Cibles : TP +0.125% = +25% ROE @ x200
-//           SL -0.0625% = -12.5% ROE (R/R 2:1)
-//           Liquidation ~ -0.5% prix
+//  SETUP DE BASE (3 etages, confluence stricte)
+//  1) TENDANCE  : EMA200 / VWAP / les deux (filtre flux macro)
+//  2) MOMENTUM  : RSI au-dessus/dessous d'un seuil + volume > MA
+//  3) TRIGGER   : Bougie englobante OU cassure de structure HH/LL
 //
-//  Fix v4 : tous les input.* sur une seule ligne (Pine v5
-//          refuse la continuation quand 'options=' debute la
-//          ligne suivante).
+//  GESTION DU RISQUE (style Prop Firm)
+//  - Risk fixe par trade (% equity)         -> sizing dynamique
+//  - SL = ATR x multiplicateur              -> s'adapte a la volatilite
+//  - TP = SL x R/R (>= 1.5)                 -> esperance positive
+//  - Trailing stop ATR optionnel            -> securise les gains
+//  - Kill switch journalier (% drawdown)    -> protege le compte
+//  - Cooldown entre trades                  -> evite l'overtrading
+//  - Frais Taker realistes integres au backtest
 // ============================================================
 
-strategy("SOL Dow Breakout x200 - RSI Filter", shorttitle="SOL Dow x200", overlay=true, initial_capital=1000, currency=currency.USD, commission_type=strategy.commission.percent, commission_value=0.05, slippage=2, margin_long=0.5, margin_short=0.5, pyramiding=0, calc_on_every_tick=false, process_orders_on_close=true)
+strategy("Smart Scalper Multi-Asset - Prop Firm Risk", shorttitle="Smart Scalper", overlay=true, initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.percent, commission_value=0.04, slippage=2, margin_long=1, margin_short=1, pyramiding=0, calc_on_every_tick=false, process_orders_on_close=true)
 
 
 // ============================================================
 //                           INPUTS
 // ============================================================
 
-// 0. Timeframes
-tfExec  = input.timeframe("5",  "TF Execution",   options=["1", "5"],                  group="0. Timeframes", tooltip="TF des bougies de declenchement (1m ou 5m).")
-tfMacro = input.timeframe("60", "TF Macro (Dow)", options=["15", "30", "60", "240"],   group="0. Timeframes", tooltip="TF de la tendance Dow. Doit etre > TF execution.")
+// 1. Risk Management
+riskPct         = input.float(0.5, "Risk % par trade",                     group="1. Risk Management (Prop Firm)", step=0.1, minval=0.1, maxval=5.0, tooltip="% de l'equity risque par trade. 0.5-1% pour respecter les regles Prop Firm.")
+maxDailyLossPct = input.float(3.0, "Max daily loss % (kill switch)",       group="1. Risk Management (Prop Firm)", step=0.5, minval=1.0, maxval=20.0, tooltip="Si la perte cumulee du jour atteint ce %, aucun nouveau trade pour la journee. Le coupe-circuit Prop Firm classique.")
+maxTradesDay    = input.int(8,     "Max trades par jour",                  group="1. Risk Management (Prop Firm)", minval=1,   maxval=50, tooltip="Plafond du nombre d'entrees quotidiennes. Anti-overtrading.")
 
-// 1. Dow Theory
-pivotLen = input.int(5, "Largeur pivot (gauche & droite)", group="1. Dow Theory", minval=2, tooltip="Bougies a gauche ET droite pour valider un pivot. 3=reactif, 5=robuste, 10=swing strict.")
+// 2. Trend Filter
+trendMode = input.string("EMA200", "Filtre de tendance", options=["EMA200", "VWAP", "Both"], group="2. Filtre de Tendance", tooltip="EMA200 = multi-asset, VWAP = ancrage intraday (crypto/indices), Both = strict.")
+emaLen    = input.int(200, "Longueur EMA", group="2. Filtre de Tendance", minval=10)
 
-// 2. Breakout (Donchian sur TF execution)
-breakoutLen = input.int(20, "Longueur du canal HH/LL", group="2. Breakout", minval=2, tooltip="Nombre de bougies pour le plus haut/bas a casser.")
+// 3. Momentum & Volume
+rsiLen       = input.int(14,   "Periode RSI",                        group="3. Momentum & Volume", minval=2)
+rsiBullLvl   = input.float(50, "RSI seuil bull (long si RSI >)",     group="3. Momentum & Volume", step=1, minval=30, maxval=70, tooltip="50 = standard. Augmenter pour signaux plus forts.")
+rsiBearLvl   = input.float(50, "RSI seuil bear (short si RSI <)",    group="3. Momentum & Volume", step=1, minval=30, maxval=70)
+useVolFilter = input.bool(true,"Filtre de volume (anti-fakeout)",    group="3. Momentum & Volume", tooltip="Le volume du signal doit etre > MA(volume) * facteur.")
+volMaLen     = input.int(20,   "MA du volume",                       group="3. Momentum & Volume", minval=1)
+volMult      = input.float(1.2,"Volume requis x MA",                 group="3. Momentum & Volume", step=0.1, minval=1.0)
 
-// 3. Filtre RSI
-rsiLen   = input.int(14,   "Periode RSI",                     group="3. RSI Filter", minval=2)
-rsiLower = input.float(30, "Borne basse RSI (interdit si <)", group="3. RSI Filter", step=1, minval=0, maxval=100, tooltip="Aucun trade si RSI < cette valeur.")
-rsiUpper = input.float(70, "Borne haute RSI (interdit si >)", group="3. RSI Filter", step=1, minval=0, maxval=100, tooltip="Aucun trade si RSI > cette valeur.")
+// 4. Trigger
+trigMode  = input.string("Engulfing", "Type de trigger", options=["Engulfing", "Structure Break"], group="4. Trigger d'Entree", tooltip="Engulfing = bougie englobante (price action pure), Structure Break = cassure HH/LL des N dernieres bougies.")
+structLen = input.int(10, "Lookback structure (si Structure Break)", group="4. Trigger d'Entree", minval=2)
 
-// 4. Volume (Dow #5)
-useVol   = input.bool(true, "Volume doit confirmer (Dow #5)", group="4. Volume")
-volMaLen = input.int(20,    "MA du volume",                   group="4. Volume", minval=1)
-volMult  = input.float(1.3, "Volume requis x MA",             group="4. Volume", step=0.1, minval=1.0, tooltip="Volume du breakout doit etre > MA(volume) * ce facteur.")
+// 5. SL & TP
+atrLen       = input.int(14,    "Periode ATR",                  group="5. Stop Loss & Take Profit", minval=1)
+atrSlMult    = input.float(1.5, "Multiplicateur ATR pour SL",   group="5. Stop Loss & Take Profit", step=0.1, minval=0.5, tooltip="SL place a (multiplicateur x ATR) du prix d'entree. 1.5 = standard.")
+rrRatio      = input.float(1.5, "Ratio R/R (TP = R/R x SL)",    group="5. Stop Loss & Take Profit", step=0.1, minval=1.0, tooltip="Minimum 1.5 pour rester rentable apres frais (winrate 50% suffit).")
+useTrailing  = input.bool(false,"Activer trailing stop ATR",    group="5. Stop Loss & Take Profit", tooltip="Si actif, le SL trail derriere le prix favorable a (multiplicateur x ATR), sans jamais s'elargir.")
+trailAtrMult = input.float(1.0, "Multiplicateur ATR trailing",  group="5. Stop Loss & Take Profit", step=0.1, minval=0.5)
 
-// 5. Risk management
-tpPct = input.float(0.125,  "Take Profit %  (+25% ROE @ x200)",   group="5. Risque", step=0.005, minval=0.001, tooltip="0.125% prix = +25% ROE x200.")
-slPct = input.float(0.0625, "Stop Loss %  (-12.5% ROE, R/R 2:1)", group="5. Risque", step=0.005, minval=0.001, tooltip="0.0625% prix = -12.5% ROE. Doit rester < 0.5% (liquidation x200).")
+// 6. Session & Pacing
+useSession   = input.bool(false,         "Filtrer par session (Forex)",   group="6. Session & Pacing", tooltip="Crypto = laisse off (24/7). Forex/indices = active et regle.")
+sessionStr   = input.session("0800-2000","Session active (UTC)",          group="6. Session & Pacing", tooltip="Forex Londres+NY : 0800-2000 UTC. Forex Londres : 0800-1700.")
+cooldownBars = input.int(3,              "Cooldown apres trade (bougies)",group="6. Session & Pacing", minval=0)
 
-// 6. Sizing
-qtyPct  = input.float(10,  "Marge par trade (% equity)",     group="6. Sizing", step=1, minval=0.1)
-levInfo = input.float(200, "Levier (sizing notionnel)",      group="6. Sizing", minval=1)
-
-// 7. Pacing
-useCooldown  = input.bool(true, "Cooldown entre trades",     group="7. Pacing")
-cooldownBars = input.int(2,     "Cooldown (bougies)",        group="7. Pacing", minval=0)
-
-
-// ============================================================
-//      MACRO TF : extraction des pivots bruts (sans var)
-// ============================================================
-
-f_pivots() =>
-    ph = ta.pivothigh(high, pivotLen, pivotLen)
-    pl = ta.pivotlow(low,   pivotLen, pivotLen)
-    [ph, pl]
-
-[macroPh, macroPl] = request.security(syminfo.tickerid, tfMacro, f_pivots(), lookahead=barmerge.lookahead_off)
+// 7. Frais (rappel)
+showFeeNote = input.bool(true, "Frais : 0.04% taker (modif. dans strategy())", group="7. Frais", tooltip="Pour ajuster les frais, modifie 'commission_value=0.04' dans la 1ere ligne strategy().")
 
 
 // ============================================================
-//      DOW STATE TRACKING (au niveau chart, fiable)
+//                       INDICATEURS
 // ============================================================
 
-var float lastPH = na
-var float prevPH = na
-var float lastPL = na
-var float prevPL = na
-
-newPH = not na(macroPh) and (na(macroPh[1]) or macroPh != macroPh[1])
-newPL = not na(macroPl) and (na(macroPl[1]) or macroPl != macroPl[1])
-
-if newPH
-    prevPH := lastPH
-    lastPH := macroPh
-
-if newPL
-    prevPL := lastPL
-    lastPL := macroPl
-
-dowBull = not na(prevPH) and not na(prevPL) and lastPH > prevPH and lastPL > prevPL
-dowBear = not na(prevPH) and not na(prevPL) and lastPH < prevPH and lastPL < prevPL
+emaTrend = ta.ema(close, emaLen)
+vwapVal  = ta.vwap
+rsiVal   = ta.rsi(close, rsiLen)
+atrVal   = ta.atr(atrLen)
+volMa    = ta.sma(volume, volMaLen)
 
 
 // ============================================================
-//   EXEC TF : breakout, RSI, volume
+//                     FILTRE DE TENDANCE
 // ============================================================
 
-f_exec() =>
-    hh        = ta.highest(high, breakoutLen)[1]
-    ll        = ta.lowest(low,   breakoutLen)[1]
-    rsi       = ta.rsi(close, rsiLen)
-    volMa     = ta.sma(volume, volMaLen)
-    longTrig  = ta.crossover(close,  hh)
-    shortTrig = ta.crossunder(close, ll)
-    volSpike  = volume > volMa * volMult
-    [hh, ll, rsi, longTrig, shortTrig, volSpike]
-
-[hhExec, llExec, rsiExec, longTrigE, shortTrigE, volSpikeE] = request.security(syminfo.tickerid, tfExec, f_exec(), lookahead=barmerge.lookahead_off)
+trendUp = trendMode == "EMA200" ? close > emaTrend : trendMode == "VWAP" ? close > vwapVal : (close > emaTrend and close > vwapVal)
+trendDn = trendMode == "EMA200" ? close < emaTrend : trendMode == "VWAP" ? close < vwapVal : (close < emaTrend and close < vwapVal)
 
 
 // ============================================================
-//                  CONDITIONS FINALES
+//                     MOMENTUM & VOLUME
 // ============================================================
 
-newLong  = longTrigE  and not longTrigE[1]
-newShort = shortTrigE and not shortTrigE[1]
-
-rsiOk = rsiExec >= rsiLower and rsiExec <= rsiUpper
-volOk = not useVol or volSpikeE
-
-var int lastEntryBar = -10000
-cooldownOk = not useCooldown or (bar_index - lastEntryBar) >= cooldownBars
-
-longSignal  = dowBull and newLong  and rsiOk and volOk and cooldownOk
-shortSignal = dowBear and newShort and rsiOk and volOk and cooldownOk
+momBull = rsiVal > rsiBullLvl
+momBear = rsiVal < rsiBearLvl
+volOk   = not useVolFilter or volume > volMa * volMult
 
 
 // ============================================================
-//                  POSITION SIZING (x200)
+//                         TRIGGERS
 // ============================================================
 
-marginUsd = strategy.equity * qtyPct / 100.0
-qtyUnits  = math.max((marginUsd * levInfo) / close, 0.0)
+// Bougie englobante haussiere / baissiere
+bullEngulf = close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
+bearEngulf = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
+
+// Cassure de structure (Donchian HH/LL des N bougies precedentes)
+hh = ta.highest(high, structLen)[1]
+ll = ta.lowest(low,   structLen)[1]
+structUp = ta.crossover(close, hh)
+structDn = ta.crossunder(close, ll)
+
+trigUp = trigMode == "Engulfing" ? bullEngulf : structUp
+trigDn = trigMode == "Engulfing" ? bearEngulf : structDn
+
+
+// ============================================================
+//                         SESSION
+// ============================================================
+
+inSession = not useSession or not na(time(timeframe.period, sessionStr))
+
+
+// ============================================================
+//          KILL SWITCH JOURNALIER + COMPTE TRADES
+// ============================================================
+
+var float dayStartEquity = na
+var int   dailyTrades    = 0
+
+newDay = ta.change(time("D")) != 0
+if newDay or na(dayStartEquity)
+    dayStartEquity := strategy.equity
+    dailyTrades    := 0
+
+dailyLossPct = na(dayStartEquity) ? 0.0 : ((dayStartEquity - strategy.equity) / dayStartEquity) * 100.0
+killOk       = dailyLossPct < maxDailyLossPct
+tradeCapOk   = dailyTrades < maxTradesDay
+
+
+// ============================================================
+//                         COOLDOWN
+// ============================================================
+
+var int lastExitBar = -10000
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    lastExitBar := bar_index
+cooldownOk = (bar_index - lastExitBar) >= cooldownBars
+
+
+// ============================================================
+//                         SIGNAUX
+// ============================================================
+
+longSignal  = trendUp and momBull and volOk and trigUp and inSession and killOk and tradeCapOk and cooldownOk
+shortSignal = trendDn and momBear and volOk and trigDn and inSession and killOk and tradeCapOk and cooldownOk
+
+
+// ============================================================
+//        SIZING DYNAMIQUE (RISK FIXE PAR TRADE)
+// ============================================================
+//  qty = risk_$ / SL_distance
+//  -> SL hit = perte exacte = riskPct de l'equity
+//  -> valable crypto, forex, indices (asset-agnostic)
+
+slDist   = atrSlMult * atrVal
+tpDist   = slDist * rrRatio
+riskUsd  = strategy.equity * riskPct / 100.0
+qtyUnits = (slDist > 0 and atrVal > 0) ? riskUsd / slDist : 0.0
 
 
 // ============================================================
 //                       EXECUTION
 // ============================================================
+//  SL/TP fixes initiaux poses au bar d'entree.
+//  Trailing ne fait que TIGHTEN le SL (jamais l'elargir).
 
-if longSignal and strategy.position_size == 0
+var float fixedSl = na
+var float fixedTp = na
+
+if longSignal and strategy.position_size == 0 and qtyUnits > 0
     strategy.entry("Long", strategy.long, qty=qtyUnits)
-    strategy.exit("XL", from_entry="Long", limit=close * (1 + tpPct / 100.0), stop=close * (1 - slPct / 100.0))
-    lastEntryBar := bar_index
+    fixedSl := close - slDist
+    fixedTp := close + tpDist
+    strategy.exit("XL", from_entry="Long", limit=fixedTp, stop=fixedSl)
+    dailyTrades := dailyTrades + 1
 
-if shortSignal and strategy.position_size == 0
+if shortSignal and strategy.position_size == 0 and qtyUnits > 0
     strategy.entry("Short", strategy.short, qty=qtyUnits)
-    strategy.exit("XS", from_entry="Short", limit=close * (1 - tpPct / 100.0), stop=close * (1 + slPct / 100.0))
-    lastEntryBar := bar_index
+    fixedSl := close + slDist
+    fixedTp := close - tpDist
+    strategy.exit("XS", from_entry="Short", limit=fixedTp, stop=fixedSl)
+    dailyTrades := dailyTrades + 1
+
+// Trailing : resserre uniquement (math.max pour long, math.min pour short)
+if useTrailing and strategy.position_size > 0
+    trailSl  = high - trailAtrMult * atrVal
+    activeSl = math.max(fixedSl, trailSl)
+    strategy.exit("XL", from_entry="Long", limit=fixedTp, stop=activeSl)
+
+if useTrailing and strategy.position_size < 0
+    trailSl  = low + trailAtrMult * atrVal
+    activeSl = math.min(fixedSl, trailSl)
+    strategy.exit("XS", from_entry="Short", limit=fixedTp, stop=activeSl)
 
 
 // ============================================================
 //                         VISUELS
 // ============================================================
 
-plot(hhExec, title="Canal HH (exec)", color=color.new(color.lime, 40), linewidth=1)
-plot(llExec, title="Canal LL (exec)", color=color.new(color.red,  40), linewidth=1)
-plot(lastPH, title="Dow HH (macro)",  color=color.new(color.aqua,    0), linewidth=2, style=plot.style_circles)
-plot(lastPL, title="Dow LL (macro)",  color=color.new(color.fuchsia, 0), linewidth=2, style=plot.style_circles)
+plot(trendMode == "EMA200" or trendMode == "Both" ? emaTrend : na, title="EMA200", color=color.new(color.orange, 0), linewidth=2)
+plot(trendMode == "VWAP"   or trendMode == "Both" ? vwapVal  : na, title="VWAP",   color=color.new(color.aqua,   0), linewidth=2)
 
-bgcolor(dowBull ? color.new(color.lime, 92) : dowBear ? color.new(color.red, 92) : na, title="Etat Dow")
+plotshape(longSignal,  title="Long Signal",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.lime, 0), size=size.small)
+plotshape(shortSignal, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,  0), size=size.small)
 
-plotshape(longSignal,  title="Long (Dow Bull + Breakout)",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.lime, 0), size=size.small)
-plotshape(shortSignal, title="Short (Dow Bear + Breakout)", style=shape.triangledown, location=location.abovebar, color=color.new(color.red,  0), size=size.small)
+plot(strategy.position_size != 0 ? fixedTp : na, title="TP", color=color.new(color.green, 20), style=plot.style_linebr, linewidth=1)
+plot(strategy.position_size != 0 ? fixedSl : na, title="SL", color=color.new(color.red,   20), style=plot.style_linebr, linewidth=1)
+
+// Kill switch visuel (fond rouge si la journee est coupee)
+bgcolor(not killOk ? color.new(color.red, 88) : na, title="Kill Switch")
 
 
 // ============================================================
 //                         ALERTES
 // ============================================================
 
-alertcondition(longSignal,  title="LONG Dow Breakout",  message="Dow Bull + Breakout LONG SOLUSDT.P @ {{close}}")
-alertcondition(shortSignal, title="SHORT Dow Breakout", message="Dow Bear + Breakout SHORT SOLUSDT.P @ {{close}}")
+alertcondition(longSignal,  title="LONG entry",  message="LONG {{ticker}} @ {{close}}")
+alertcondition(shortSignal, title="SHORT entry", message="SHORT {{ticker}} @ {{close}}")
